@@ -1,7 +1,7 @@
 
 # Wrangle AI Node.js Library
 
-The official Node.js library for the **Wrangle AI Gateway**.
+The official Node.js library for the **WrangleAI**.
 
 Wrangle AI provides a high-performance, drop-in replacement for the OpenAI SDK that adds **Smart Routing**, **Cost Tracking**, and **Enterprise Governance**. It enables you to route prompts to the most capable and cost-effective models (GPT-5, Gemini 2.5, Mistral etc.) automatically, without rewriting your application logic.
 
