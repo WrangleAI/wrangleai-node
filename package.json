@@ -1,6 +1,6 @@
 {
   "name": "wrangleai",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "description": "Official Node.js client for Wrangle AI",
   "main": "dist/index.js",
   "scripts": {

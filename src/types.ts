@@ -61,9 +61,21 @@ export type ChatCompletionTool =
   | ChatCompletionFunctionTool 
   | ChatCompletionWebSearchTool;
 
+export interface SLMConfig {
+  /**
+   * Enable routing to Small Language Models (SLMs) for cost/speed optimization.
+   */
+  useSlm: boolean;
+  /**
+   * Optional category to guide the router (e.g., 'coding', 'chat', 'summarization').
+   */
+  useCase?: 'coding' | 'tool_use' | 'reasoning' | 'chat' | 'summarization' | 'classification' | 'creative_writing' | 'grammar_correction' | 'short_copywriting' | 'autoformatting' | 'other' | (string & {});
+}
+
 export interface ChatCompletionCreateParams {
   messages: ChatCompletionMessageParam[];
   model: WrangleModel;
+  slm?: SLMConfig;
   frequency_penalty?: number;
   logit_bias?: Record<string, number>;
   logprobs?: boolean;
