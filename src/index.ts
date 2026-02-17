@@ -10,9 +10,20 @@ import {
   Stream
 } from './types';
 import { StreamChatCompletion } from './streaming';
+import {
+  WrangleError,
+  AuthenticationError,
+  RateLimitError,
+  BadRequestError,
+  NotFoundError,
+  APIError,
+  APIConnectionError,
+  makeStatusError
+} from './errors';
 
-// Re-export types so users can access them easily
+// Re-export types and errors so users can access them easily
 export * from './types';
+export * from './errors';
 
 export class WrangleAI {
   private client: AxiosInstance;
@@ -67,17 +78,26 @@ export class WrangleAI {
           responseType: 'stream', // Critical for Node.js axios
         });
         
-        // Pass the raw Node.js stream to our generator
-        return StreamChatCompletion(response.data);
+        // Extract request ID from headers
+        const requestId = response.headers['x-request-id'];
+        
+        // Pass the raw Node.js stream to our generator with request ID
+        return StreamChatCompletion(response.data, requestId);
 
       } else {
         // Standard Request
         const response = await this.client.post<ChatCompletion>('/chat/completions', params);
+        
+        // Extract and attach request ID
+        const requestId = response.headers['x-request-id'];
+        if (requestId && response.data) {
+          response.data._request_id = requestId;
+        }
+        
         return response.data;
       }
     } catch (error) {
-      this.handleError(error);
-      throw error;
+      throw this.handleError(error);
     }
   }
 
@@ -90,8 +110,7 @@ export class WrangleAI {
         const response = await this.client.get<UsageResponse>('/usage', { params });
         return response.data;
       } catch (error) {
-        this.handleError(error);
-        throw error;
+        throw this.handleError(error);
       }
     },
 
@@ -102,8 +121,7 @@ export class WrangleAI {
         });
         return response.data;
       } catch (error) {
-        this.handleError(error);
-        throw error;
+        throw this.handleError(error);
       }
     },
   };
@@ -114,8 +132,7 @@ export class WrangleAI {
         const response = await this.client.get<CostResponse>('/cost', { params });
         return response.data;
       } catch (error) {
-        this.handleError(error);
-        throw error;
+        throw this.handleError(error);
       }
     },
   };
@@ -130,27 +147,38 @@ export class WrangleAI {
         });
         return response.data;
       } catch (error) {
-        this.handleError(error);
-        throw error;
+        throw this.handleError(error);
       }
     },
   };
 
-  private handleError(error: any): void {
+  private handleError(error: any): WrangleError {
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
-      // If responseType is stream, data might be a Buffer, try to parse it if possible, 
-      // otherwise fallback to status text.
+      const headers = error.response?.headers as Record<string, string> | undefined;
+      
+      // Extract error message from response
       let errorMessage = error.message;
+      let errorData = error.response?.data;
 
+      // If responseType is stream, data might be a Buffer, try to parse it
       if (error.response?.data && !Buffer.isBuffer(error.response.data)) {
         const data = error.response.data as any;
-        errorMessage = data?.error?.message || data?.error || error.message;
+        errorMessage = data?.error?.message || data?.message || data?.error || error.message;
+        errorData = data;
       }
 
-      throw new Error(`WrangleAI Error [${status}]: ${errorMessage}`);
+      // Use structured error mapping
+      return makeStatusError(status, errorData, errorMessage, headers);
     }
-    throw error;
+    
+    // Network/connection errors
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      return new APIConnectionError(error.message, { error });
+    }
+    
+    // Unknown errors
+    return new WrangleError(error.message || 'An unknown error occurred', { error });
   }
 }
 

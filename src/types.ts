@@ -151,6 +151,12 @@ export interface ChatCompletion {
     completion_tokens: number;
     total_tokens: number;
   };
+
+  /**
+   * Request ID from x-request-id header.
+   * Useful for debugging and reporting issues to WrangleAI.
+   */
+  _request_id?: string;
 }
 
 export interface UsageResponse {
@@ -204,6 +210,12 @@ export interface ChatCompletionChunk {
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   }>;
+
+  /**
+   * Request ID from x-request-id header.
+   * Useful for debugging and reporting issues to WrangleAI.
+   */
+  _request_id?: string;
 }
 
 export type Stream<Item> = AsyncIterable<Item>;

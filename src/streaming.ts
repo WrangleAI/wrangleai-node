@@ -3,9 +3,13 @@ import { ChatCompletionChunk } from './types';
 /**
  * Parses a raw Node.js stream of Server-Sent Events (SSE) 
  * and yields typed ChatCompletionChunk objects.
+ * 
+ * @param responseStream - The raw Node.js stream (IncomingMessage)
+ * @param requestId - Optional request ID from x-request-id header
  */
 export async function* StreamChatCompletion(
-  responseStream: any // Type is essentially IncomingMessage in Node
+  responseStream: any,
+  requestId?: string
 ): AsyncIterable<ChatCompletionChunk> {
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
@@ -35,6 +39,12 @@ export async function* StreamChatCompletion(
 
         try {
           const parsed = JSON.parse(data) as ChatCompletionChunk;
+          
+          // Attach request ID to chunk if available
+          if (requestId) {
+            parsed._request_id = requestId;
+          }
+          
           yield parsed;
         } catch (e) {
           console.warn('WrangleSDK: Failed to parse SSE chunk', e);

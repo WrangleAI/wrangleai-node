@@ -13,6 +13,8 @@ Wrangle AI provides a high-performance, drop-in replacement for the OpenAI SDK t
 
 *   **Drop-in Compatibility:** Uses the same API signature as the official OpenAI SDK.
 *   **Smart Routing (`model: "auto"`):** The Gateway analyzes your prompt complexity and routes it to the optimal model to save costs and tokens.
+*   **Structured Exception Handling:** OpenAI-compatible error classes with detailed context (status, request_id, headers).
+*   **Request ID Tracking:** Every response includes `_request_id` for debugging and support.
 *   **Web Search / Grounding:** Built-in support for live web access with citations.
 *   **Usage & Cost APIs:** Programmatic access to your token usage and spend.
 *   **Streaming Support:** Full support for Server-Sent Events (SSE).
@@ -228,15 +230,78 @@ if (verify.valid) {
 
 ## Error Handling
 
-Errors are thrown as standard JavaScript errors with status codes and messages populated from the Gateway.
+The SDK provides structured exception classes matching the OpenAI SDK pattern. All errors include status codes, request IDs, and detailed context for debugging.
+
+### Exception Types
 
 ```typescript
+import WrangleAI from 'wrangleai';
+
 try {
-  await client.chat.completions.create({ ... });
+  const completion = await client.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: 'Hello!' }]
+  });
 } catch (error) {
-  if (error instanceof Error) {
-    console.error(error.message); // e.g. "WrangleAI Error [402]: Budget exceeded"
+  if (error instanceof WrangleAI.AuthenticationError) {
+    // 401: Invalid or missing API key
+    console.error('Auth failed:', error.status, error.request_id);
+  } else if (error instanceof WrangleAI.RateLimitError) {
+    // 429: Rate limit exceeded
+    console.error('Rate limited:', error.headers?.['retry-after']);
+  } else if (error instanceof WrangleAI.BadRequestError) {
+    // 400: Malformed request
+    console.error('Bad request:', error.error);
+  } else if (error instanceof WrangleAI.NotFoundError) {
+    // 404: Resource not found
+    console.error('Not found:', error.message);
+  } else if (error instanceof WrangleAI.APIError) {
+    // 500+: Server error
+    console.error('API error:', error.status);
+  } else if (error instanceof WrangleAI.APIConnectionError) {
+    // Network/timeout errors
+    console.error('Connection failed:', error.message);
+  } else if (error instanceof WrangleAI.WrangleError) {
+    // Base class for all SDK errors
+    console.error('SDK error:', error.message);
   }
+}
+```
+
+### Error Properties
+
+All error classes provide:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `message` | `string` | Human-readable error message |
+| `status` | `number?` | HTTP status code (if applicable) |
+| `request_id` | `string?` | Request ID for debugging with support |
+| `headers` | `Record<string, string>?` | Response headers |
+| `error` | `any?` | Raw error object from API |
+
+### Request ID Tracking
+
+Every response includes a `_request_id` property for debugging:
+
+```typescript
+const completion = await client.chat.completions.create({
+  model: 'auto',
+  messages: [{ role: 'user', content: 'Test' }]
+});
+
+// Log request ID for support tickets
+console.log('Request ID:', completion._request_id);
+
+// Available in streaming too
+const stream = await client.chat.completions.create({
+  model: 'auto',
+  messages: [{ role: 'user', content: 'Test' }],
+  stream: true
+});
+
+for await (const chunk of stream) {
+  console.log('Chunk Request ID:', chunk._request_id);
 }
 ```
 
