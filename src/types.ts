@@ -11,6 +11,11 @@ export interface ClientOptions {
    */
   baseURL?: string;
   /**
+   * RAG API Base URL for files and vector stores.
+   * Auto-detected (port 8085) if not provided.
+   */
+  ragBaseURL?: string;
+  /**
    * Timeout in milliseconds. Defaults to 60 seconds.
    */
   timeout?: number;
@@ -188,6 +193,19 @@ export interface KeyVerifyResponse {
   expiry?: string;
 }
 
+// --- Models API Response ---
+export interface Model {
+  id: string;
+  object: 'model';
+  created: number;
+  owned_by: string;
+}
+
+export interface ModelsListResponse {
+  object: 'list';
+  data: Model[];
+}
+
 export interface ChatCompletionChunk {
   id: string;
   object: 'chat.completion.chunk';
@@ -219,3 +237,126 @@ export interface ChatCompletionChunk {
 }
 
 export type Stream<Item> = AsyncIterable<Item>;
+
+// --- Files API ---
+export interface FileObject {
+  id: string;
+  object: 'file';
+  bytes: number;
+  created_at: number;
+  filename: string;
+  purpose: string;
+  status?: string;
+  status_details?: string;
+  expires_at?: number;
+}
+
+export interface FileDeleted {
+  id: string;
+  object: 'file';
+  deleted: boolean;
+}
+
+export interface FileListResponse {
+  object: 'list';
+  data: FileObject[];
+  has_more: boolean;
+  first_id?: string;
+  last_id?: string;
+}
+
+// --- Vector Stores API ---
+export interface VectorStoreFileCounts {
+  total: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface VectorStoreExpiresAfter {
+  anchor: string;
+  days: number;
+}
+
+export interface VectorStore {
+  id: string;
+  object: 'vector_store';
+  created_at: number;
+  name: string;
+  usage_bytes: number;
+  file_counts: VectorStoreFileCounts;
+  status: 'expired' | 'in_progress' | 'completed';
+  expires_after?: VectorStoreExpiresAfter;
+  expires_at?: number;
+  last_active_at?: number;
+  metadata?: Record<string, string>;
+}
+
+export interface VectorStoreDeleted {
+  id: string;
+  object: 'vector_store.deleted';
+  deleted: boolean;
+}
+
+export interface VectorStoreListResponse {
+  object: 'list';
+  data: VectorStore[];
+  has_more: boolean;
+  first_id?: string;
+  last_id?: string;
+}
+
+// --- Vector Store Files API ---
+export interface VectorStoreFileError {
+  code: string;
+  message: string;
+}
+
+export interface VectorStoreFile {
+  id: string;
+  object: 'vector_store.file';
+  created_at: number;
+  vector_store_id: string;
+  status: 'in_progress' | 'completed' | 'cancelled' | 'failed';
+  usage_bytes: number;
+  last_error?: VectorStoreFileError;
+  chunking_strategy?: Record<string, unknown>;
+  attributes?: Record<string, string | number | boolean>;
+}
+
+export interface VectorStoreFileDeleted {
+  id: string;
+  object: 'vector_store.file.deleted';
+  deleted: boolean;
+}
+
+export interface VectorStoreFileListResponse {
+  object: 'list';
+  data: VectorStoreFile[];
+  has_more: boolean;
+  first_id?: string;
+  last_id?: string;
+}
+
+// --- Vector Store Search API ---
+export interface SearchResultContent {
+  type: string;
+  text: string;
+}
+
+export interface SearchResultItem {
+  file_id: string;
+  filename: string;
+  score: number;
+  content: SearchResultContent[];
+  attributes?: Record<string, string | number | boolean>;
+}
+
+export interface VectorStoreSearchResponse {
+  object: 'vector_store.search_results.page';
+  data: SearchResultItem[];
+  search_query: string[];
+  has_more: boolean;
+  next_page?: string;
+}

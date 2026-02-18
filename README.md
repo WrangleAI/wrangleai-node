@@ -200,6 +200,19 @@ Providing a `useCase` helps the router select a specialist model.
 
 The SDK provides specific endpoints to monitor your usage and costs programmatically.
 
+### List Available Models
+
+Get a list of all currently available models. Compatible with OpenAI's `client.models.list()`.
+
+```typescript
+const models = await client.models.list();
+
+console.log('Available models:');
+models.data.forEach(model => {
+  console.log(`- ${model.id} (${model.owned_by})`);
+});
+```
+
 ### Get Usage Stats
 ```typescript
 // Get stats for all models (optional date range)

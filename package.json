@@ -17,7 +17,9 @@
     "ai",
     "smart-routing",
     "llm",
-    "sdk"
+    "sdk",
+    "rag",
+    "vector-store"
   ],
   "author": "WrangleAI",
   "license": "MIT",
@@ -26,7 +28,8 @@
   },
   "homepage": "https://github.com/WrangleAI/wrangleai-node#readme",
   "dependencies": {
-    "axios": "^1.13.2"
+    "axios": "^1.13.2",
+    "form-data": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.2",

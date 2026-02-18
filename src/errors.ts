@@ -54,9 +54,27 @@ export class RateLimitError extends WrangleError {
 }
 
 /**
+ * Raised when Unprocessable Entity (422).
+ */
+export class UnprocessableEntityError extends WrangleError {
+  constructor(message: string, options?: APIErrorOptions) {
+    super(message, options);
+  }
+}
+
+/**
  * Raised when request is malformed or invalid (400).
  */
 export class BadRequestError extends WrangleError {
+  constructor(message: string, options?: APIErrorOptions) {
+    super(message, options);
+  }
+}
+
+/**
+ * Raised when the user does not have permission to access the resource (403).
+ */
+export class PermissionDeniedError extends WrangleError {
   constructor(message: string, options?: APIErrorOptions) {
     super(message, options);
   }
@@ -97,20 +115,51 @@ export function makeStatusError(
   status: number | undefined,
   error: any,
   message: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
 ): WrangleError {
-  const request_id = headers?.['x-request-id'];
+  /*
+Error Details in OpenAI SDK:
+Status Code	    Error Type
+
+    400	        BadRequestError
+    401	        AuthenticationError
+    403	        PermissionDeniedError
+    404	        NotFoundError
+    422	        UnprocessableEntityError
+    429	        RateLimitError
+    >=500	      InternalServerError
+    N/A	        APIConnectionError
+
+*/
+  const request_id = headers?.["x-request-id"];
 
   if (status === 400) {
     return new BadRequestError(message, { status, error, headers, request_id });
   }
 
   if (status === 401) {
-    return new AuthenticationError(message, { status, error, headers, request_id });
+    return new AuthenticationError(message, {
+      status,
+      error,
+      headers,
+      request_id,
+    });
   }
 
+  if (status == 403) {
+    return new PermissionDeniedError(message, {
+      status,
+      error,
+      headers,
+      request_id,
+    });
+  }
   if (status === 404) {
     return new NotFoundError(message, { status, error, headers, request_id });
+  }
+
+  if (status === 422) {
+    return new UnprocessableEntityError(message, { status, error, headers, request_id });
   }
 
   if (status === 429) {
