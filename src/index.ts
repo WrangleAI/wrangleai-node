@@ -134,7 +134,6 @@ export class WrangleAI {
   public models = {
     /**
      * Lists the currently available models.
-     * Compatible with OpenAI's models.list() endpoint.
      */
     list: async () => {
       try {

@@ -241,6 +241,102 @@ if (verify.valid) {
 
 ---
 
+## RAG API (Files & Vector Stores)
+
+WrangleAI provides a complete RAG (Retrieval-Augmented Generation) API for file management and vector search operations.
+
+### Files API
+
+Upload and manage files for use in vector stores:
+
+```typescript
+// Upload a file
+const fileBuffer = fs.readFileSync('document.txt');
+const file = await client.files.create(fileBuffer, 'assistants');
+console.log(`Uploaded: ${file.id}`);
+
+// List all files
+const filesList = await client.files.list({ limit: 10 });
+filesList.data.forEach(file => {
+  console.log(`${file.filename} - ${file.bytes} bytes`);
+});
+
+// Retrieve file metadata
+const fileObj = await client.files.retrieve('file-abc123');
+
+// Delete a file
+await client.files.delete('file-abc123');
+```
+
+### Vector Stores API
+
+Create and manage vector stores for semantic search:
+
+```typescript
+// Create a vector store
+const vectorStore = await client.vector_stores.create({
+  name: 'Knowledge Base',
+  file_ids: ['file-abc123'], // Optional: add files immediately
+  metadata: { category: 'documentation' }
+});
+
+// List vector stores
+const stores = await client.vector_stores.list({ limit: 5, order: 'desc' });
+
+// Retrieve a vector store
+const store = await client.vector_stores.retrieve('vs_abc123');
+
+// Update vector store
+const updated = await client.vector_stores.update('vs_abc123', {
+  name: 'Updated Knowledge Base'
+});
+
+// Search within a vector store
+const results = await client.vector_stores.search('vs_abc123', {
+  query: 'How do I authenticate?',
+  max_num_results: 5
+});
+
+results.data.forEach(result => {
+  console.log(`Score: ${result.score}`);
+  console.log(`Content: ${result.content[0].text}`);
+  console.log(`File: ${result.filename}`);
+});
+
+// Delete vector store
+await client.vector_stores.delete('vs_abc123');
+```
+
+### Vector Store Files
+
+Manage files within vector stores:
+
+```typescript
+// Add file to vector store
+const vsFile = await client.vector_stores.files.create('vs_abc123', {
+  file_id: 'file-abc123',
+  attributes: { source: 'documentation' }
+});
+
+// List files in vector store
+const files = await client.vector_stores.files.list('vs_abc123', {
+  filter: 'completed' // or 'in_progress', 'failed', 'cancelled'
+});
+
+// Get file from vector store
+const file = await client.vector_stores.files.retrieve('vs_abc123', 'file-abc123');
+
+// Update file attributes
+const updatedFile = await client.vector_stores.files.update('vs_abc123', 'file-abc123', {
+  attributes: { updated: 'true' }
+});
+
+// Remove file from vector store
+await client.vector_stores.files.delete('vs_abc123', 'file-abc123');
+```
+
+---
+
 ## Error Handling
 
 The SDK provides structured exception classes matching the OpenAI SDK pattern. All errors include status codes, request IDs, and detailed context for debugging.
