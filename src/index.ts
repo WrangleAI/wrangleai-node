@@ -49,7 +49,8 @@ export class WrangleAI {
     }
 
     this.apiKey = options.apiKey;
-    const baseURL = options.baseURL || "https://gateway.wrangleai.com/v1";
+    // const baseURL = options.baseURL || "https://gateway.wrangleai.com/v1";
+    const baseURL = "https://staging-gateway.wrangleai.com/v1";
     
     // Auto-detect RAG base URL (port 8085) if not provided
     this.ragBaseURL = options.ragBaseURL || baseURL.replace(':8080', ':8085');
@@ -200,10 +201,11 @@ export class WrangleAI {
     /**
      * Upload a file.
      */
-    create: async (file: Buffer, purpose: string = 'assistants'): Promise<FileObject> => {
+    create: async (file: Buffer, purpose: string = 'assistants', filename?: string): Promise<FileObject> => {
       try {
         const formData = new FormData();
-        formData.append('file', file, { filename: 'upload' });
+        const fname = filename || 'upload';
+        formData.append('file', file, { filename: fname });
         formData.append('purpose', purpose);
 
         const response = await this.ragClient.post<FileObject>('/files', formData, {
