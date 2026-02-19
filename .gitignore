@@ -31,5 +31,11 @@ Thumbs.db
 .idea
 *.swp
 
-# testing folder
+# history
+.history/
+
+# dev docs
+dev docs/
+
+# tests
 tests/

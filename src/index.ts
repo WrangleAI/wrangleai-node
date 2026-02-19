@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import FormData from 'form-data';
 import {
   ClientOptions,
@@ -19,7 +19,11 @@ import {
   VectorStoreFile,
   VectorStoreFileDeleted,
   VectorStoreFileListResponse,
-  VectorStoreSearchResponse
+  VectorStoreSearchResponse,
+  SustainabilityReport,
+  RequestOptions,
+  Logger,
+  LogLevel
 } from './types';
 import { StreamChatCompletion } from './streaming';
 import {
@@ -37,32 +41,106 @@ import {
 export * from './types';
 export * from './errors';
 
+/**
+ * Simple console-based logger
+ */
+class ConsoleLogger implements Logger {
+  constructor(private level: LogLevel) {}
+
+  private shouldLog(level: LogLevel): boolean {
+    const levels: LogLevel[] = ['debug', 'info', 'warn', 'error', 'silent'];
+    const currentIndex = levels.indexOf(this.level);
+    const messageIndex = levels.indexOf(level);
+    return messageIndex >= currentIndex && this.level !== 'silent';
+  }
+
+  debug(...args: any[]): void {
+    if (this.shouldLog('debug')) console.debug('[WrangleAI Debug]', ...args);
+  }
+
+  info(...args: any[]): void {
+    if (this.shouldLog('info')) console.info('[WrangleAI Info]', ...args);
+  }
+
+  warn(...args: any[]): void {
+    if (this.shouldLog('warn')) console.warn('[WrangleAI Warn]', ...args);
+  }
+
+  error(...args: any[]): void {
+    if (this.shouldLog('error')) console.error('[WrangleAI Error]', ...args);
+  }
+}
+
 export class WrangleAI {
   private client: AxiosInstance;
   private ragClient: AxiosInstance;
   private apiKey: string;
   private ragBaseURL: string;
+  private baseURL: string;
+  private timeout: number;
+  private maxRetries: number;
+  private logger: Logger;
 
-  constructor(options: ClientOptions) {
-    if (!options.apiKey) {
-      throw new Error("The WrangleAI client requires an apiKey argument");
+  constructor(options: ClientOptions = {}) {
+    // Auto-detect API key from environment
+    const apiKey = options.apiKey || process.env.WRANGLEAI_API_KEY || process.env.OPENAI_API_KEY;
+    
+    if (!apiKey) {
+      throw new Error(
+        "The WrangleAI client requires an apiKey. " +
+        "Pass it as an argument or set WRANGLEAI_API_KEY environment variable."
+      );
     }
 
-    this.apiKey = options.apiKey;
-    // const baseURL = options.baseURL || "https://gateway.wrangleai.com/v1";
-    const baseURL = "https://staging-gateway.wrangleai.com/v1";
+    // Browser safety check
+    if (typeof window !== 'undefined' && !options.dangerouslyAllowBrowser) {
+      throw new Error(
+        "WrangleAI client detected browser environment. " +
+        "To use in browser (not recommended for production), " +
+        "pass dangerouslyAllowBrowser: true in options."
+      );
+    }
+
+    this.apiKey = apiKey;
+    // Keep hardcoded staging URL as per user request
+    this.baseURL = "https://staging-gateway.wrangleai.com/v1";
+    this.timeout = options.timeout || 60000;
+    this.maxRetries = options.maxRetries ?? 2;
+    
+    // Setup logger
+    const logLevel = options.logLevel || 'silent';
+    this.logger = options.logger || new ConsoleLogger(logLevel);
     
     // Auto-detect RAG base URL (port 8085) if not provided
-    this.ragBaseURL = options.ragBaseURL || baseURL.replace(':8080', ':8085');
+    this.ragBaseURL = options.ragBaseURL || this.baseURL.replace(':8080', ':8085');
+
+    this.logger.debug('Initializing WrangleAI client', { baseURL: this.baseURL, ragBaseURL: this.ragBaseURL });
 
     this.client = axios.create({
-      baseURL,
+      baseURL: this.baseURL,
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      timeout: options.timeout || 60000,
+      timeout: this.timeout,
     });
+    
+    // Add error interceptor to convert axios errors to our custom errors
+    this.client.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response) {
+          // Extract error message from response data
+          const data = error.response.data;
+          const message = data?.error?.message || data?.message || data?.error || error.message;
+          
+          // Convert axios error with response to our custom error
+          throw makeStatusError(error.response.status, error, message, error.response.headers);
+        }
+        // Network error or other axios error
+        throw error;
+      }
+    );
     
     // RAG client for files and vector stores (port 8085)
     this.ragClient = axios.create({
@@ -71,8 +149,124 @@ export class WrangleAI {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      timeout: options.timeout || 60000,
+      timeout: this.timeout,
     });
+    
+    // Add error interceptor for RAG client too
+    this.ragClient.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response) {
+          const data = error.response.data;
+          const message = data?.error?.message || data?.message || data?.error || error.message;
+          throw makeStatusError(error.response.status, error, message, error.response.headers);
+        }
+        throw error;
+      }
+    );
+  }
+
+  /**
+   * Create a new client instance with modified options.
+   * Useful for per-request customization.
+   */
+  public withOptions(options: Partial<ClientOptions>): WrangleAI {
+    return new WrangleAI({
+      apiKey: options.apiKey || this.apiKey,
+      baseURL: options.baseURL || this.baseURL,
+      ragBaseURL: options.ragBaseURL || this.ragBaseURL,
+      timeout: options.timeout || this.timeout,
+      maxRetries: options.maxRetries ?? this.maxRetries,
+      logger: options.logger || this.logger,
+      logLevel: options.logLevel,
+      dangerouslyAllowBrowser: options.dangerouslyAllowBrowser,
+    });
+  }
+
+  /**
+   * Retry logic with exponential backoff
+   */
+  private async retryRequest<T>(
+    fn: () => Promise<T>,
+    maxRetries: number,
+    requestName: string
+  ): Promise<T> {
+    let lastError: any;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          // Exponential backoff: 2^attempt * 100ms + jitter
+          const baseDelay = Math.pow(2, attempt) * 100;
+          const jitter = Math.random() * 100;
+          const delay = baseDelay + jitter;
+          
+          this.logger.info(`Retrying ${requestName} (attempt ${attempt + 1}/${maxRetries + 1}) after ${delay.toFixed(0)}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+        return await fn();
+      } catch (error: any) {
+        lastError = error;
+        
+        // Extract status code from error (works for both axios errors and our custom errors)
+        const status = error.response?.status || error.status;
+        
+        // Don't retry on certain status codes:
+        // - 4xx errors except 429 (rate limit) and 408 (timeout)
+        // - Authentication, bad request, not found errors should not be retried
+        const shouldNotRetry = 
+          error instanceof AuthenticationError ||
+          error instanceof BadRequestError ||
+          error instanceof NotFoundError ||
+          (status && status >= 400 && status < 500 && status !== 429 && status !== 408);
+        
+        if (shouldNotRetry || attempt === maxRetries) {
+          this.logger.error(`Request ${requestName} failed after ${attempt + 1} attempts`, error);
+          throw error;
+        }
+        
+        this.logger.warn(`Request ${requestName} failed (attempt ${attempt + 1}), will retry`, {
+          error: error.message,
+          status: status
+        });
+      }
+    }
+    
+    throw lastError;
+  }
+
+  /**
+   * Make a request with retry and abort signal support
+   */
+  private async makeRequest<T>(
+    client: AxiosInstance,
+    config: AxiosRequestConfig,
+    options?: RequestOptions,
+    requestName?: string
+  ): Promise<T> {
+    const effectiveMaxRetries = options?.maxRetries ?? this.maxRetries;
+    const effectiveTimeout = options?.timeout || this.timeout;
+    
+    // Add abort signal support
+    if (options?.signal) {
+      config.signal = options.signal as any;
+    }
+    
+    // Override timeout if specified
+    if (options?.timeout) {
+      config.timeout = effectiveTimeout;
+    }
+
+    return this.retryRequest<T>(
+      async () => {
+        this.logger.debug(`Making request: ${config.method?.toUpperCase()} ${config.url}`);
+        const response = await client.request<T>(config);
+        return response.data;
+      },
+      effectiveMaxRetries,
+      requestName || config.url || 'request'
+    );
   }
 
   /**
@@ -136,10 +330,14 @@ export class WrangleAI {
     /**
      * Lists the currently available models.
      */
-    list: async () => {
+    list: async (options?: RequestOptions) => {
       try {
-        const response = await this.client.get<ModelsListResponse>('/models');
-        return response.data;
+        return await this.makeRequest<ModelsListResponse>(
+          this.client,
+          { method: 'GET', url: '/models' },
+          options,
+          'models.list'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -147,21 +345,34 @@ export class WrangleAI {
   };
 
   public usage = {
-    retrieve: async (params?: { startDate?: string; endDate?: string }) => {
+    retrieve: async (
+      params?: { startDate?: string; endDate?: string },
+      options?: RequestOptions
+    ) => {
       try {
-        const response = await this.client.get<UsageResponse>('/usage', { params });
-        return response.data;
+        return await this.makeRequest<UsageResponse>(
+          this.client,
+          { method: 'GET', url: '/usage', params },
+          options,
+          'usage.retrieve'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
     },
 
-    retrieveByModel: async (model: string, params?: { startDate?: string; endDate?: string }) => {
+    retrieveByModel: async (
+      model: string,
+      params?: { startDate?: string; endDate?: string },
+      options?: RequestOptions
+    ) => {
       try {
-        const response = await this.client.get<UsageResponse>('/usage/model', { 
-          params: { ...params, model } 
-        });
-        return response.data;
+        return await this.makeRequest<UsageResponse>(
+          this.client,
+          { method: 'GET', url: '/usage/model', params: { ...params, model } },
+          options,
+          'usage.retrieveByModel'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -169,10 +380,43 @@ export class WrangleAI {
   };
 
   public cost = {
-    retrieve: async (params?: { startDate?: string; endDate?: string }) => {
+    retrieve: async (
+      params?: { startDate?: string; endDate?: string },
+      options?: RequestOptions
+    ) => {
       try {
-        const response = await this.client.get<CostResponse>('/cost', { params });
-        return response.data;
+        return await this.makeRequest<CostResponse>(
+          this.client,
+          { method: 'GET', url: '/cost', params },
+          options,
+          'cost.retrieve'
+        );
+      } catch (error) {
+        throw this.handleError(error);
+      }
+    },
+  };
+
+  /**
+   * Sustainability API - Track environmental impact of AI usage
+   */
+  public sustainability = {
+    /**
+     * Get sustainability report for user's AI usage.
+     * @param params - Query parameters including startDate and endDate
+     * @param options - Request options (abort signal, timeout, retries)
+     */
+    retrieve: async (
+      params?: { startDate?: string; endDate?: string },
+      options?: RequestOptions
+    ): Promise<SustainabilityReport> => {
+      try {
+        return await this.makeRequest<SustainabilityReport>(
+          this.client,
+          { method: 'GET', url: '/sustainability', params },
+          options,
+          'sustainability.retrieve'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -180,14 +424,20 @@ export class WrangleAI {
   };
 
   public keys = {
-    verify: async () => {
+    verify: async (options?: RequestOptions) => {
       try {
-        const response = await this.client.get<KeyVerifyResponse>('/keys/verify', {
-          headers: {
-            'X-API-Key': this.apiKey
-          }
-        });
-        return response.data;
+        return await this.makeRequest<KeyVerifyResponse>(
+          this.client,
+          { 
+            method: 'GET', 
+            url: '/keys/verify',
+            headers: {
+              'X-API-Key': this.apiKey
+            }
+          },
+          options,
+          'keys.verify'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -472,6 +722,11 @@ export class WrangleAI {
   };
 
   private handleError(error: any): WrangleError {
+    // If error is already a WrangleError (from interceptor), return it as-is
+    if (error instanceof WrangleError) {
+      return error;
+    }
+    
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const headers = error.response?.headers as Record<string, string> | undefined;

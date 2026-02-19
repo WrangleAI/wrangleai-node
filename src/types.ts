@@ -3,11 +3,12 @@
 export interface ClientOptions {
   /**
    * Your Wrangle AI API Key.
+   * Can also be set via WRANGLEAI_API_KEY environment variable.
    */
-  apiKey: string;
+  apiKey?: string;
   /**
    * Base URL for the API.
-   * Defaults to https://gateway.wrangleai.com/v1
+   * Defaults to https://staging-gateway.wrangleai.com/v1
    */
   baseURL?: string;
   /**
@@ -19,6 +20,34 @@ export interface ClientOptions {
    * Timeout in milliseconds. Defaults to 60 seconds.
    */
   timeout?: number;
+  /**
+   * Maximum number of retries for failed requests.
+   * Defaults to 2.
+   */
+  maxRetries?: number;
+  /**
+   * Custom logger instance for debugging.
+   */
+  logger?: Logger;
+  /**
+   * Log level: 'debug' | 'info' | 'warn' | 'error' | 'silent'
+   * Defaults to 'silent'
+   */
+  logLevel?: LogLevel;
+  /**
+   * Danger: Allow usage in browser environments (may expose API key).
+   * Defaults to false.
+   */
+  dangerouslyAllowBrowser?: boolean;
+}
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
+
+export interface Logger {
+  debug(...args: any[]): void;
+  info(...args: any[]): void;
+  warn(...args: any[]): void;
+  error(...args: any[]): void;
 }
 
 // --- Chat Completion Request ---
@@ -359,4 +388,56 @@ export interface VectorStoreSearchResponse {
   search_query: string[];
   has_more: boolean;
   next_page?: string;
+}
+
+// --- Sustainability API ---
+export interface SustainabilityEmissions {
+  EnergyKWh: number;
+  CarbonGrams: number;
+  ConfidenceScore: number;
+  ConfidenceBand: {
+    Low: number;
+    High: number;
+  };
+  Meta: {
+    RegionDetected: string;
+    RegionMethod: string;
+  };
+}
+
+export interface ModelSustainabilityBreakdown {
+  Model: string;
+  RequestCount: number;
+  TotalTokens: number;
+  Emissions: SustainabilityEmissions;
+}
+
+export interface SustainabilityEquivalent {
+  Label: string;
+  Value: number;
+  Unit: string;
+}
+
+export interface SustainabilityReport {
+  StartDate: string;
+  EndDate: string;
+  TotalEnergyKWh: number;
+  TotalCarbonGrams: number;
+  UsageByModel: ModelSustainabilityBreakdown[];
+  Equivalents: SustainabilityEquivalent[];
+}
+
+export interface RequestOptions {
+  /**
+   * AbortSignal to cancel the request.
+   */
+  signal?: AbortSignal;
+  /**
+   * Override timeout for this request.
+   */
+  timeout?: number;
+  /**
+   * Override maxRetries for this request.
+   */
+  maxRetries?: number;
 }
