@@ -146,7 +146,7 @@ Status Code	    Error Type
     });
   }
 
-  if (status == 403) {
+  if (status === 403) {
     return new PermissionDeniedError(message, {
       status,
       error,

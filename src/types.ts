@@ -50,10 +50,68 @@ export interface Logger {
   error(...args: any[]): void;
 }
 
+// --- Content Parts for Multimodal Support ---
+
+/**
+ * Text content part for multimodal messages
+ */
+export interface ChatCompletionContentPartText {
+  type: 'text';
+  text: string;
+}
+
+/**
+ * Image content part for multimodal messages (vision)
+ * Learn more: https://platform.openai.com/docs/guides/vision
+ */
+export interface ChatCompletionContentPartImage {
+  type: 'image_url';
+  image_url: {
+    /**
+     * Either a URL of the image or the base64 encoded image data
+     */
+    url: string;
+    /**
+     * Specifies the detail level of the image
+     */
+    detail?: 'auto' | 'low' | 'high';
+  };
+}
+
+/**
+ * Audio content part for multimodal messages
+ * Learn more: https://platform.openai.com/docs/guides/audio
+ */
+export interface ChatCompletionContentPartAudio {
+  type: 'input_audio';
+  input_audio: {
+    /**
+     * Base64 encoded audio data
+     */
+    data: string;
+    /**
+     * The format of the encoded audio data
+     */
+    format: 'wav' | 'mp3';
+  };
+}
+
+/**
+ * Union type for all content parts
+ */
+export type ChatCompletionContentPart =
+  | ChatCompletionContentPartText
+  | ChatCompletionContentPartImage
+  | ChatCompletionContentPartAudio;
+
 // --- Chat Completion Request ---
 export interface ChatCompletionMessageParam {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  /**
+   * The content of the message.
+   * Can be a simple string or an array of content parts for multimodal input (text, images, audio).
+   */
+  content: string | ChatCompletionContentPart[];
   name?: string;
 }
 
@@ -190,7 +248,7 @@ export interface ChatCompletion {
    * Request ID from x-request-id header.
    * Useful for debugging and reporting issues to WrangleAI.
    */
-  _request_id?: string;
+  request_id?: string;
 }
 
 export interface UsageResponse {
@@ -262,7 +320,7 @@ export interface ChatCompletionChunk {
    * Request ID from x-request-id header.
    * Useful for debugging and reporting issues to WrangleAI.
    */
-  _request_id?: string;
+  request_id?: string;
 }
 
 export type Stream<Item> = AsyncIterable<Item>;

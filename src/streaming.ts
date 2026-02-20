@@ -42,7 +42,7 @@ export async function* StreamChatCompletion(
           
           // Attach request ID to chunk if available
           if (requestId) {
-            parsed._request_id = requestId;
+            parsed.request_id = requestId;
           }
           
           yield parsed;

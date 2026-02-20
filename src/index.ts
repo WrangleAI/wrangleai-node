@@ -125,23 +125,6 @@ export class WrangleAI {
       timeout: this.timeout,
     });
     
-    // Add error interceptor to convert axios errors to our custom errors
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (error.response) {
-          // Extract error message from response data
-          const data = error.response.data;
-          const message = data?.error?.message || data?.message || data?.error || error.message;
-          
-          // Convert axios error with response to our custom error
-          throw makeStatusError(error.response.status, error, message, error.response.headers);
-        }
-        // Network error or other axios error
-        throw error;
-      }
-    );
-    
     // RAG client for files and vector stores (port 8085)
     this.ragClient = axios.create({
       baseURL: this.ragBaseURL,
@@ -151,19 +134,6 @@ export class WrangleAI {
       },
       timeout: this.timeout,
     });
-    
-    // Add error interceptor for RAG client too
-    this.ragClient.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (error.response) {
-          const data = error.response.data;
-          const message = data?.error?.message || data?.message || data?.error || error.message;
-          throw makeStatusError(error.response.status, error, message, error.response.headers);
-        }
-        throw error;
-      }
-    );
   }
 
   /**
@@ -184,7 +154,36 @@ export class WrangleAI {
   }
 
   /**
+   * Check if a response status code should trigger a retry.
+   * Matches OpenAI SDK behavior.
+   */
+  private shouldRetry(status: number | undefined): boolean {
+    if (!status) return false;
+    
+    // Retry on request timeouts
+    if (status === 408) return true;
+    
+    // Retry on rate limits
+    if (status === 429) return true;
+    
+    // Retry on internal errors
+    if (status >= 500) return true;
+    
+    return false;
+  }
+
+  /**
+   * Extract error message from axios error response
+   */
+  private extractErrorMessage(error: any): string {
+    if (!error.response) return error.message;
+    const data = error.response.data;
+    return data?.error?.message || data?.message || data?.error || error.message;
+  }
+
+  /**
    * Retry logic with exponential backoff
+   * Checks retry eligibility BEFORE throwing custom errors
    */
   private async retryRequest<T>(
     fn: () => Promise<T>,
@@ -209,27 +208,32 @@ export class WrangleAI {
       } catch (error: any) {
         lastError = error;
         
-        // Extract status code from error (works for both axios errors and our custom errors)
-        const status = error.response?.status || error.status;
+        // Extract status code from axios error
+        const status = error.response?.status;
         
-        // Don't retry on certain status codes:
-        // - 4xx errors except 429 (rate limit) and 408 (timeout)
-        // - Authentication, bad request, not found errors should not be retried
-        const shouldNotRetry = 
-          error instanceof AuthenticationError ||
-          error instanceof BadRequestError ||
-          error instanceof NotFoundError ||
-          (status && status >= 400 && status < 500 && status !== 429 && status !== 408);
+        // Check if we should retry based on status code
+        const canRetry = this.shouldRetry(status);
         
-        if (shouldNotRetry || attempt === maxRetries) {
-          this.logger.error(`Request ${requestName} failed after ${attempt + 1} attempts`, error);
-          throw error;
+        // If we can retry and have attempts left, continue the loop
+        if (canRetry && attempt < maxRetries) {
+          this.logger.warn(`Request ${requestName} failed with status ${status} (attempt ${attempt + 1}/${maxRetries + 1}), will retry`, {
+            error: error.message,
+            status: status
+          });
+          continue;
         }
         
-        this.logger.warn(`Request ${requestName} failed (attempt ${attempt + 1}), will retry`, {
-          error: error.message,
-          status: status
-        });
+        // No more retries or not retryable - convert to custom error and throw
+        this.logger.error(`Request ${requestName} failed after ${attempt + 1} attempts`, error);
+        
+        // Convert axios error to custom error before throwing
+        if (error.response) {
+          const message = this.extractErrorMessage(error);
+          throw makeStatusError(status, error, message, error.response.headers);
+        }
+        
+        // Network error or other error - throw as is
+        throw error;
       }
     }
     
@@ -313,7 +317,7 @@ export class WrangleAI {
         // Extract and attach request ID
         const requestId = response.headers['x-request-id'];
         if (requestId && response.data) {
-          response.data._request_id = requestId;
+          response.data.request_id = requestId;
         }
         
         return response.data;
