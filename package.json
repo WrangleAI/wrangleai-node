@@ -49,10 +49,7 @@
     "url": "https://github.com/WrangleAI/wrangleai-node/issues"
   },
   "homepage": "https://github.com/WrangleAI/wrangleai-node#readme",
-  "dependencies": {
-    "axios": "^1.13.2",
-    "form-data": "^4.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^24.10.2",

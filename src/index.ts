@@ -1,5 +1,3 @@
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import FormData from 'form-data';
 import {
   ClientOptions,
   ChatCompletionCreateParams,
@@ -45,7 +43,7 @@ export * from './errors';
  * Simple console-based logger
  */
 class ConsoleLogger implements Logger {
-  constructor(private level: LogLevel) {}
+  constructor(private level: LogLevel) { }
 
   private shouldLog(level: LogLevel): boolean {
     const levels: LogLevel[] = ['debug', 'info', 'warn', 'error', 'silent'];
@@ -71,9 +69,20 @@ class ConsoleLogger implements Logger {
   }
 }
 
+/**
+ * Internal interface for fetch request configuration
+ */
+interface FetchRequestConfig {
+  method: string;
+  path: string;
+  body?: any;
+  query?: Record<string, string | number | boolean | undefined>;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  timeout?: number;
+}
+
 export class WrangleAI {
-  private client: AxiosInstance;
-  private ragClient: AxiosInstance;
   private apiKey: string;
   private ragBaseURL: string;
   private baseURL: string;
@@ -84,7 +93,7 @@ export class WrangleAI {
   constructor(options: ClientOptions = {}) {
     // Auto-detect API key from environment
     const apiKey = options.apiKey || process.env.WRANGLEAI_API_KEY || process.env.OPENAI_API_KEY;
-    
+
     if (!apiKey) {
       throw new Error(
         "The WrangleAI client requires an apiKey. " +
@@ -106,34 +115,29 @@ export class WrangleAI {
     this.baseURL = "https://staging-gateway.wrangleai.com/v1";
     this.timeout = options.timeout || 60000;
     this.maxRetries = options.maxRetries ?? 2;
-    
+
     // Setup logger
     const logLevel = options.logLevel || 'silent';
     this.logger = options.logger || new ConsoleLogger(logLevel);
-    
+
     // Auto-detect RAG base URL (port 8085) if not provided
     this.ragBaseURL = options.ragBaseURL || this.baseURL.replace(':8080', ':8085');
 
     this.logger.debug('Initializing WrangleAI client', { baseURL: this.baseURL, ragBaseURL: this.ragBaseURL });
+  }
 
-    this.client = axios.create({
-      baseURL: this.baseURL,
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: this.timeout,
-    });
-    
-    // RAG client for files and vector stores (port 8085)
-    this.ragClient = axios.create({
-      baseURL: this.ragBaseURL,
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: this.timeout,
-    });
+  /**
+   * Get the base URL of the client.
+   */
+  public getBaseURL(): string {
+    return this.baseURL;
+  }
+
+  /**
+   * Get the RAG base URL of the client.
+   */
+  public getRagBaseURL(): string {
+    return this.ragBaseURL;
   }
 
   /**
@@ -159,118 +163,298 @@ export class WrangleAI {
    */
   private shouldRetry(status: number | undefined): boolean {
     if (!status) return false;
-    
+
     // Retry on request timeouts
     if (status === 408) return true;
-    
+
     // Retry on rate limits
     if (status === 429) return true;
-    
+
     // Retry on internal errors
     if (status >= 500) return true;
-    
+
     return false;
   }
 
   /**
-   * Extract error message from axios error response
+   * Build a full URL from base URL, path, and optional query params.
+   * Uses string concatenation instead of new URL(path, base) because
+   * paths starting with '/' are absolute from the origin in URL constructor.
    */
-  private extractErrorMessage(error: any): string {
-    if (!error.response) return error.message;
-    const data = error.response.data;
-    return data?.error?.message || data?.message || data?.error || error.message;
+  private buildURL(baseURL: string, path: string, query?: Record<string, string | number | boolean | undefined>): string {
+    const base = baseURL.endsWith('/') ? baseURL.slice(0, -1) : baseURL;
+    const cleanPath = path.startsWith('/') ? path : '/' + path;
+    const fullURL = base + cleanPath;
+
+    if (query) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined) {
+          params.set(key, String(value));
+        }
+      }
+      const qs = params.toString();
+      if (qs) return fullURL + '?' + qs;
+    }
+
+    return fullURL;
   }
 
   /**
-   * Retry logic with exponential backoff
-   * Checks retry eligibility BEFORE throwing custom errors
+   * Core fetch method — replaces axios instances.
+   * Handles headers, timeout, and abort signal.
    */
-  private async retryRequest<T>(
-    fn: () => Promise<T>,
-    maxRetries: number,
-    requestName: string
+  private async _fetch(
+    baseURL: string,
+    config: FetchRequestConfig
+  ): Promise<Response> {
+    const url = this.buildURL(baseURL, config.path, config.query);
+
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${this.apiKey}`,
+      ...config.headers,
+    };
+
+    // Only set Content-Type for JSON bodies (not FormData — fetch sets it automatically with boundary)
+    if (config.body && !(config.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const effectiveTimeout = config.timeout || this.timeout;
+
+    // Create abort controller for timeout
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), effectiveTimeout);
+
+    // Combine user signal and timeout signal
+    let signal: AbortSignal;
+    if (config.signal) {
+      // If user provided a signal, we need to abort on either
+      signal = config.signal;
+      // Also wire up timeout abort
+      const onTimeout = () => {
+        if (!config.signal!.aborted) {
+          timeoutController.abort();
+        }
+      };
+      setTimeout(onTimeout, effectiveTimeout);
+      // If user aborts, clear timeout
+      config.signal.addEventListener('abort', () => clearTimeout(timeoutId), { once: true });
+    } else {
+      signal = timeoutController.signal;
+    }
+
+    const fetchOptions: RequestInit = {
+      method: config.method.toUpperCase(),
+      headers,
+      signal: config.signal || timeoutController.signal,
+      ...(config.body ? {
+        body: config.body instanceof FormData ? config.body : JSON.stringify(config.body)
+      } : {}),
+    };
+
+    try {
+      const response = await fetch(url, fetchOptions);
+      return response;
+    } catch (error: any) {
+      // Convert fetch errors to WrangleAI errors
+      if (error.name === 'AbortError') {
+        if (config.signal?.aborted) {
+          // User cancelled the request
+          throw error;
+        }
+        // Timeout
+        throw new APIConnectionError(`Request timed out after ${effectiveTimeout}ms`, { error });
+      }
+      throw new APIConnectionError(error.message || 'Network connection failed', { error });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Convert Headers to a plain Record.
+   * Uses forEach() instead of entries() for broader TypeScript DOM lib compatibility.
+   */
+  private headersToRecord(headers: Headers): Record<string, string> {
+    const record: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      record[key] = value;
+    });
+    return record;
+  }
+
+  /**
+   * Infer MIME type from filename extension.
+   * Prevents server rejection of 'application/octet-stream'.
+   */
+  private inferMimeType(filename: string): string {
+    const ext = filename.split('.').pop()?.toLowerCase();
+    const mimeMap: Record<string, string> = {
+      txt: 'text/plain',
+      csv: 'text/csv',
+      json: 'application/json',
+      jsonl: 'application/jsonl',
+      pdf: 'application/pdf',
+      md: 'text/markdown',
+      html: 'text/html',
+      htm: 'text/html',
+      xml: 'text/xml',
+      yaml: 'text/yaml',
+      yml: 'text/yaml',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      gif: 'image/gif',
+      webp: 'image/webp',
+    };
+    return mimeMap[ext || ''] || 'application/octet-stream';
+  }
+
+  /**
+   * Parse error response body from a failed fetch Response.
+   */
+  private async parseErrorResponse(response: Response): Promise<{ message: string; errorData: any }> {
+    let errorData: any = null;
+    let message = `Request failed with status ${response.status}`;
+
+    try {
+      const text = await response.text();
+      try {
+        errorData = JSON.parse(text);
+        message = errorData?.error?.message || errorData?.message || errorData?.error || message;
+      } catch {
+        // Response wasn't JSON
+        if (text) message = text;
+      }
+    } catch {
+      // Could not read body
+    }
+
+    return { message, errorData };
+  }
+
+  /**
+   * Make a request with retry and abort signal support.
+   * Replaces the old axios-based makeRequest + retryRequest flow.
+   */
+  private async makeRequest<T>(
+    baseURL: string,
+    config: FetchRequestConfig,
+    options?: RequestOptions,
+    requestName?: string
   ): Promise<T> {
+    const effectiveMaxRetries = options?.maxRetries ?? this.maxRetries;
+    const effectiveTimeout = options?.timeout || this.timeout;
+
     let lastError: any;
-    
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+
+    for (let attempt = 0; attempt <= effectiveMaxRetries; attempt++) {
       try {
         if (attempt > 0) {
           // Exponential backoff: 2^attempt * 100ms + jitter
           const baseDelay = Math.pow(2, attempt) * 100;
           const jitter = Math.random() * 100;
           const delay = baseDelay + jitter;
-          
-          this.logger.info(`Retrying ${requestName} (attempt ${attempt + 1}/${maxRetries + 1}) after ${delay.toFixed(0)}ms`);
+
+          this.logger.info(`Retrying ${requestName || config.path} (attempt ${attempt + 1}/${effectiveMaxRetries + 1}) after ${delay.toFixed(0)}ms`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
-        
-        return await fn();
+
+        this.logger.debug(`Making request: ${config.method.toUpperCase()} ${config.path}`);
+
+        const response = await this._fetch(baseURL, {
+          ...config,
+          signal: options?.signal as AbortSignal | undefined,
+          timeout: effectiveTimeout,
+        });
+
+        if (!response.ok) {
+          const status = response.status;
+          const headers = this.headersToRecord(response.headers);
+          const { message, errorData } = await this.parseErrorResponse(response);
+
+          // Check if we should retry based on status code
+          const canRetry = this.shouldRetry(status);
+
+          if (canRetry && attempt < effectiveMaxRetries) {
+            this.logger.warn(`Request ${requestName || config.path} failed with status ${status} (attempt ${attempt + 1}/${effectiveMaxRetries + 1}), will retry`, {
+              error: message,
+              status: status
+            });
+            lastError = makeStatusError(status, errorData, message, headers);
+            continue;
+          }
+
+          // No more retries or not retryable
+          this.logger.error(`Request ${requestName || config.path} failed after ${attempt + 1} attempts`);
+          throw makeStatusError(status, errorData, message, headers);
+        }
+
+        // Handle empty responses (e.g., DELETE returning 200 with no body)
+        const text = await response.text();
+        if (!text) return {} as T;
+        const data = JSON.parse(text) as T;
+        return data;
       } catch (error: any) {
         lastError = error;
-        
-        // Extract status code from axios error
-        const status = error.response?.status;
-        
-        // Check if we should retry based on status code
-        const canRetry = this.shouldRetry(status);
-        
-        // If we can retry and have attempts left, continue the loop
-        if (canRetry && attempt < maxRetries) {
-          this.logger.warn(`Request ${requestName} failed with status ${status} (attempt ${attempt + 1}/${maxRetries + 1}), will retry`, {
-            error: error.message,
-            status: status
-          });
+
+        // If it's already a WrangleError (from status error above), and no more retries, throw it
+        if (error instanceof WrangleError) {
+          // Check if it's retryable and we have attempts left
+          if (this.shouldRetry(error.status) && attempt < effectiveMaxRetries) {
+            continue;
+          }
+          throw error;
+        }
+
+        // AbortError from user — don't retry
+        if (error.name === 'AbortError') {
+          throw error;
+        }
+
+        // Network/connection errors — retry if attempts remain
+        if (error instanceof APIConnectionError && attempt < effectiveMaxRetries) {
+          this.logger.warn(`Request ${requestName || config.path} failed with connection error (attempt ${attempt + 1}/${effectiveMaxRetries + 1}), will retry`);
           continue;
         }
-        
-        // No more retries or not retryable - convert to custom error and throw
-        this.logger.error(`Request ${requestName} failed after ${attempt + 1} attempts`, error);
-        
-        // Convert axios error to custom error before throwing
-        if (error.response) {
-          const message = this.extractErrorMessage(error);
-          throw makeStatusError(status, error, message, error.response.headers);
-        }
-        
-        // Network error or other error - throw as is
+
         throw error;
       }
     }
-    
+
     throw lastError;
   }
 
   /**
-   * Make a request with retry and abort signal support
+   * Make a request and return the full Response (for streaming).
+   * Similar to makeRequest but returns raw Response instead of parsed JSON.
    */
-  private async makeRequest<T>(
-    client: AxiosInstance,
-    config: AxiosRequestConfig,
-    options?: RequestOptions,
-    requestName?: string
-  ): Promise<T> {
-    const effectiveMaxRetries = options?.maxRetries ?? this.maxRetries;
+  private async makeStreamRequest(
+    baseURL: string,
+    config: FetchRequestConfig,
+    options?: RequestOptions
+  ): Promise<Response> {
     const effectiveTimeout = options?.timeout || this.timeout;
-    
-    // Add abort signal support
-    if (options?.signal) {
-      config.signal = options.signal as any;
-    }
-    
-    // Override timeout if specified
-    if (options?.timeout) {
-      config.timeout = effectiveTimeout;
+
+    const response = await this._fetch(baseURL, {
+      ...config,
+      signal: options?.signal as AbortSignal | undefined,
+      timeout: effectiveTimeout,
+    });
+
+    if (!response.ok) {
+      const status = response.status;
+      const headers = this.headersToRecord(response.headers);
+      const { message, errorData } = await this.parseErrorResponse(response);
+      throw makeStatusError(status, errorData, message, headers);
     }
 
-    return this.retryRequest<T>(
-      async () => {
-        this.logger.debug(`Making request: ${config.method?.toUpperCase()} ${config.url}`);
-        const response = await client.request<T>(config);
-        return response.data;
-      },
-      effectiveMaxRetries,
-      requestName || config.url || 'request'
-    );
+    return response;
   }
 
   /**
@@ -281,12 +465,12 @@ export class WrangleAI {
       /**
        * Creates a completion for the chat message.
        */
-      create: ((params: ChatCompletionCreateParams) => {
-        return this.createChatRequest(params);
+      create: ((params: ChatCompletionCreateParams, options?: RequestOptions) => {
+        return this.createChatRequest(params, options);
       }) as {
-        (params: ChatCompletionCreateParams & { stream: true }): Promise<Stream<ChatCompletionChunk>>;
-        (params: ChatCompletionCreateParams & { stream?: false }): Promise<ChatCompletion>;
-        (params: ChatCompletionCreateParams): Promise<ChatCompletion | Stream<ChatCompletionChunk>>;
+        (params: ChatCompletionCreateParams & { stream: true }, options?: RequestOptions): Promise<Stream<ChatCompletionChunk>>;
+        (params: ChatCompletionCreateParams & { stream?: false }, options?: RequestOptions): Promise<ChatCompletion>;
+        (params: ChatCompletionCreateParams, options?: RequestOptions): Promise<ChatCompletion | Stream<ChatCompletionChunk>>;
       },
     },
   };
@@ -295,32 +479,53 @@ export class WrangleAI {
    * Internal method to handle the branching logic for streaming vs standard
    */
   private async createChatRequest(
-    params: ChatCompletionCreateParams
+    params: ChatCompletionCreateParams,
+    options?: RequestOptions
   ): Promise<ChatCompletion | Stream<ChatCompletionChunk>> {
     try {
       if (params.stream) {
-        // Streaming Request
-        const response = await this.client.post('/chat/completions', params, {
-          responseType: 'stream', // Critical for Node.js axios
-        });
-        
+        // Streaming Request — get raw Response
+        const response = await this.makeStreamRequest(
+          this.baseURL,
+          { method: 'POST', path: '/chat/completions', body: params }
+        );
+
         // Extract request ID from headers
-        const requestId = response.headers['x-request-id'];
-        
-        // Pass the raw Node.js stream to our generator with request ID
-        return StreamChatCompletion(response.data, requestId);
+        const requestId = response.headers.get('x-request-id') || undefined;
+
+        if (!response.body) {
+          throw new WrangleError('No response body received for streaming request');
+        }
+
+        // Pass the ReadableStream to our generator with request ID
+        return StreamChatCompletion(response.body, requestId);
 
       } else {
         // Standard Request
-        const response = await this.client.post<ChatCompletion>('/chat/completions', params);
-        
-        // Extract and attach request ID
-        const requestId = response.headers['x-request-id'];
-        if (requestId && response.data) {
-          response.data.request_id = requestId;
+        const response = await this._fetch(this.baseURL, {
+          method: 'POST',
+          path: '/chat/completions',
+          body: params,
+          signal: options?.signal as AbortSignal | undefined,
+          timeout: options?.timeout || this.timeout,
+        });
+
+        if (!response.ok) {
+          const status = response.status;
+          const headers = this.headersToRecord(response.headers);
+          const { message, errorData } = await this.parseErrorResponse(response);
+          throw makeStatusError(status, errorData, message, headers);
         }
-        
-        return response.data;
+
+        const data = await response.json() as ChatCompletion;
+
+        // Extract and attach request ID
+        const requestId = response.headers.get('x-request-id');
+        if (requestId && data) {
+          data.request_id = requestId;
+        }
+
+        return data;
       }
     } catch (error) {
       throw this.handleError(error);
@@ -337,8 +542,8 @@ export class WrangleAI {
     list: async (options?: RequestOptions) => {
       try {
         return await this.makeRequest<ModelsListResponse>(
-          this.client,
-          { method: 'GET', url: '/models' },
+          this.baseURL,
+          { method: 'GET', path: '/models' },
           options,
           'models.list'
         );
@@ -355,8 +560,8 @@ export class WrangleAI {
     ) => {
       try {
         return await this.makeRequest<UsageResponse>(
-          this.client,
-          { method: 'GET', url: '/usage', params },
+          this.baseURL,
+          { method: 'GET', path: '/usage', query: params as any },
           options,
           'usage.retrieve'
         );
@@ -372,8 +577,8 @@ export class WrangleAI {
     ) => {
       try {
         return await this.makeRequest<UsageResponse>(
-          this.client,
-          { method: 'GET', url: '/usage/model', params: { ...params, model } },
+          this.baseURL,
+          { method: 'GET', path: '/usage/model', query: { ...params, model } as any },
           options,
           'usage.retrieveByModel'
         );
@@ -390,8 +595,8 @@ export class WrangleAI {
     ) => {
       try {
         return await this.makeRequest<CostResponse>(
-          this.client,
-          { method: 'GET', url: '/cost', params },
+          this.baseURL,
+          { method: 'GET', path: '/cost', query: params as any },
           options,
           'cost.retrieve'
         );
@@ -416,8 +621,8 @@ export class WrangleAI {
     ): Promise<SustainabilityReport> => {
       try {
         return await this.makeRequest<SustainabilityReport>(
-          this.client,
-          { method: 'GET', url: '/sustainability', params },
+          this.baseURL,
+          { method: 'GET', path: '/sustainability', query: params as any },
           options,
           'sustainability.retrieve'
         );
@@ -431,10 +636,10 @@ export class WrangleAI {
     verify: async (options?: RequestOptions) => {
       try {
         return await this.makeRequest<KeyVerifyResponse>(
-          this.client,
-          { 
-            method: 'GET', 
-            url: '/keys/verify',
+          this.baseURL,
+          {
+            method: 'GET',
+            path: '/keys/verify',
             headers: {
               'X-API-Key': this.apiKey
             }
@@ -455,19 +660,33 @@ export class WrangleAI {
     /**
      * Upload a file.
      */
-    create: async (file: Buffer, purpose: string = 'assistants', filename?: string): Promise<FileObject> => {
+    create: async (file: Buffer | Uint8Array | Blob, purpose: string = 'assistants', filename?: string): Promise<FileObject> => {
       try {
         const formData = new FormData();
         const fname = filename || 'upload';
-        formData.append('file', file, { filename: fname });
+
+        // Infer MIME type from filename extension so the server doesn't reject as application/octet-stream
+        const mimeType = this.inferMimeType(fname);
+
+        // Convert Buffer/Uint8Array to Blob for native FormData
+        const blob = file instanceof Blob ? file : new Blob([file as BlobPart], { type: mimeType });
+        formData.append('file', blob, fname);
         formData.append('purpose', purpose);
 
-        const response = await this.ragClient.post<FileObject>('/files', formData, {
-          headers: {
-            ...formData.getHeaders()
-          }
+        const response = await this._fetch(this.ragBaseURL, {
+          method: 'POST',
+          path: '/files',
+          body: formData,
         });
-        return response.data;
+
+        if (!response.ok) {
+          const status = response.status;
+          const headers = this.headersToRecord(response.headers);
+          const { message, errorData } = await this.parseErrorResponse(response);
+          throw makeStatusError(status, errorData, message, headers);
+        }
+
+        return await response.json() as FileObject;
       } catch (error) {
         throw this.handleError(error);
       }
@@ -483,8 +702,12 @@ export class WrangleAI {
       after?: string;
     }): Promise<FileListResponse> => {
       try {
-        const response = await this.ragClient.get<FileListResponse>('/files', { params });
-        return response.data;
+        return await this.makeRequest<FileListResponse>(
+          this.ragBaseURL,
+          { method: 'GET', path: '/files', query: params as any },
+          undefined,
+          'files.list'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -495,8 +718,12 @@ export class WrangleAI {
      */
     retrieve: async (fileId: string): Promise<FileObject> => {
       try {
-        const response = await this.ragClient.get<FileObject>(`/files/${fileId}`);
-        return response.data;
+        return await this.makeRequest<FileObject>(
+          this.ragBaseURL,
+          { method: 'GET', path: `/files/${fileId}` },
+          undefined,
+          'files.retrieve'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -507,8 +734,12 @@ export class WrangleAI {
      */
     delete: async (fileId: string): Promise<FileDeleted> => {
       try {
-        const response = await this.ragClient.delete<FileDeleted>(`/files/${fileId}`);
-        return response.data;
+        return await this.makeRequest<FileDeleted>(
+          this.ragBaseURL,
+          { method: 'DELETE', path: `/files/${fileId}` },
+          undefined,
+          'files.delete'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -530,8 +761,12 @@ export class WrangleAI {
       chunking_strategy?: Record<string, unknown>;
     }): Promise<VectorStore> => {
       try {
-        const response = await this.ragClient.post<VectorStore>('/vector_stores', params || {});
-        return response.data;
+        return await this.makeRequest<VectorStore>(
+          this.ragBaseURL,
+          { method: 'POST', path: '/vector_stores', body: params || {} },
+          undefined,
+          'vector_stores.create'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -547,8 +782,12 @@ export class WrangleAI {
       before?: string;
     }): Promise<VectorStoreListResponse> => {
       try {
-        const response = await this.ragClient.get<VectorStoreListResponse>('/vector_stores', { params });
-        return response.data;
+        return await this.makeRequest<VectorStoreListResponse>(
+          this.ragBaseURL,
+          { method: 'GET', path: '/vector_stores', query: params as any },
+          undefined,
+          'vector_stores.list'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -559,8 +798,12 @@ export class WrangleAI {
      */
     retrieve: async (vectorStoreId: string): Promise<VectorStore> => {
       try {
-        const response = await this.ragClient.get<VectorStore>(`/vector_stores/${vectorStoreId}`);
-        return response.data;
+        return await this.makeRequest<VectorStore>(
+          this.ragBaseURL,
+          { method: 'GET', path: `/vector_stores/${vectorStoreId}` },
+          undefined,
+          'vector_stores.retrieve'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -578,11 +821,12 @@ export class WrangleAI {
       }
     ): Promise<VectorStore> => {
       try {
-        const response = await this.ragClient.post<VectorStore>(
-          `/vector_stores/${vectorStoreId}`,
-          params || {}
+        return await this.makeRequest<VectorStore>(
+          this.ragBaseURL,
+          { method: 'POST', path: `/vector_stores/${vectorStoreId}`, body: params || {} },
+          undefined,
+          'vector_stores.update'
         );
-        return response.data;
       } catch (error) {
         throw this.handleError(error);
       }
@@ -593,8 +837,12 @@ export class WrangleAI {
      */
     delete: async (vectorStoreId: string): Promise<VectorStoreDeleted> => {
       try {
-        const response = await this.ragClient.delete<VectorStoreDeleted>(`/vector_stores/${vectorStoreId}`);
-        return response.data;
+        return await this.makeRequest<VectorStoreDeleted>(
+          this.ragBaseURL,
+          { method: 'DELETE', path: `/vector_stores/${vectorStoreId}` },
+          undefined,
+          'vector_stores.delete'
+        );
       } catch (error) {
         throw this.handleError(error);
       }
@@ -614,11 +862,12 @@ export class WrangleAI {
       }
     ): Promise<VectorStoreSearchResponse> => {
       try {
-        const response = await this.ragClient.post<VectorStoreSearchResponse>(
-          `/vector_stores/${vectorStoreId}/search`,
-          params
+        return await this.makeRequest<VectorStoreSearchResponse>(
+          this.ragBaseURL,
+          { method: 'POST', path: `/vector_stores/${vectorStoreId}/search`, body: params },
+          undefined,
+          'vector_stores.search'
         );
-        return response.data;
       } catch (error) {
         throw this.handleError(error);
       }
@@ -640,11 +889,12 @@ export class WrangleAI {
         }
       ): Promise<VectorStoreFile> => {
         try {
-          const response = await this.ragClient.post<VectorStoreFile>(
-            `/vector_stores/${vectorStoreId}/files`,
-            params
+          return await this.makeRequest<VectorStoreFile>(
+            this.ragBaseURL,
+            { method: 'POST', path: `/vector_stores/${vectorStoreId}/files`, body: params },
+            undefined,
+            'vector_stores.files.create'
           );
-          return response.data;
         } catch (error) {
           throw this.handleError(error);
         }
@@ -664,11 +914,12 @@ export class WrangleAI {
         }
       ): Promise<VectorStoreFileListResponse> => {
         try {
-          const response = await this.ragClient.get<VectorStoreFileListResponse>(
-            `/vector_stores/${vectorStoreId}/files`,
-            { params }
+          return await this.makeRequest<VectorStoreFileListResponse>(
+            this.ragBaseURL,
+            { method: 'GET', path: `/vector_stores/${vectorStoreId}/files`, query: params as any },
+            undefined,
+            'vector_stores.files.list'
           );
-          return response.data;
         } catch (error) {
           throw this.handleError(error);
         }
@@ -679,10 +930,12 @@ export class WrangleAI {
        */
       retrieve: async (vectorStoreId: string, fileId: string): Promise<VectorStoreFile> => {
         try {
-          const response = await this.ragClient.get<VectorStoreFile>(
-            `/vector_stores/${vectorStoreId}/files/${fileId}`
+          return await this.makeRequest<VectorStoreFile>(
+            this.ragBaseURL,
+            { method: 'GET', path: `/vector_stores/${vectorStoreId}/files/${fileId}` },
+            undefined,
+            'vector_stores.files.retrieve'
           );
-          return response.data;
         } catch (error) {
           throw this.handleError(error);
         }
@@ -699,11 +952,12 @@ export class WrangleAI {
         }
       ): Promise<VectorStoreFile> => {
         try {
-          const response = await this.ragClient.post<VectorStoreFile>(
-            `/vector_stores/${vectorStoreId}/files/${fileId}`,
-            params
+          return await this.makeRequest<VectorStoreFile>(
+            this.ragBaseURL,
+            { method: 'POST', path: `/vector_stores/${vectorStoreId}/files/${fileId}`, body: params },
+            undefined,
+            'vector_stores.files.update'
           );
-          return response.data;
         } catch (error) {
           throw this.handleError(error);
         }
@@ -714,10 +968,12 @@ export class WrangleAI {
        */
       delete: async (vectorStoreId: string, fileId: string): Promise<VectorStoreFileDeleted> => {
         try {
-          const response = await this.ragClient.delete<VectorStoreFileDeleted>(
-            `/vector_stores/${vectorStoreId}/files/${fileId}`
+          return await this.makeRequest<VectorStoreFileDeleted>(
+            this.ragBaseURL,
+            { method: 'DELETE', path: `/vector_stores/${vectorStoreId}/files/${fileId}` },
+            undefined,
+            'vector_stores.files.delete'
           );
-          return response.data;
         } catch (error) {
           throw this.handleError(error);
         }
@@ -726,35 +982,26 @@ export class WrangleAI {
   };
 
   private handleError(error: any): WrangleError {
-    // If error is already a WrangleError (from interceptor), return it as-is
+    // If error is already a WrangleError, return it as-is
     if (error instanceof WrangleError) {
       return error;
     }
-    
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status;
-      const headers = error.response?.headers as Record<string, string> | undefined;
-      
-      // Extract error message from response
-      let errorMessage = error.message;
-      let errorData = error.response?.data;
 
-      // If responseType is stream, data might be a Buffer, try to parse it
-      if (error.response?.data && !Buffer.isBuffer(error.response.data)) {
-        const data = error.response.data as any;
-        errorMessage = data?.error?.message || data?.message || data?.error || error.message;
-        errorData = data;
-      }
-
-      // Use structured error mapping
-      return makeStatusError(status, errorData, errorMessage, headers);
+    // AbortError from user cancellation
+    if (error.name === 'AbortError') {
+      return new APIConnectionError('Request was aborted', { error });
     }
-    
+
     // Network/connection errors
     if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
       return new APIConnectionError(error.message, { error });
     }
-    
+
+    // TypeError from fetch (e.g., network failures)
+    if (error instanceof TypeError) {
+      return new APIConnectionError(error.message || 'Network connection failed', { error });
+    }
+
     // Unknown errors
     return new WrangleError(error.message || 'An unknown error occurred', { error });
   }
