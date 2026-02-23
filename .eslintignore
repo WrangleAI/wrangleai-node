@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+.history
+.vscode
+*.d.ts
+/.idea
+README.md

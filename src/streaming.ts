@@ -33,22 +33,22 @@ function readableStreamToAsyncIterable<T>(stream: ReadableStream<T>): AsyncItera
           reader.releaseLock();
           await cancelPromise;
           return { done: true, value: undefined };
-        }
+        },
       };
-    }
+    },
   };
 }
 
 /**
- * Parses a ReadableStream of Server-Sent Events (SSE) 
+ * Parses a ReadableStream of Server-Sent Events (SSE)
  * and yields typed ChatCompletionChunk objects.
- * 
+ *
  * @param responseStream - The ReadableStream<Uint8Array> from fetch response.body
  * @param requestId - Optional request ID from x-request-id header
  */
 export async function* StreamChatCompletion(
   responseStream: ReadableStream<Uint8Array>,
-  requestId?: string
+  requestId?: string,
 ): AsyncIterable<ChatCompletionChunk> {
   const decoder = new TextDecoder('utf-8');
   let buffer = '';

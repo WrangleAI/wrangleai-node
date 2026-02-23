@@ -115,20 +115,14 @@ export interface ChatCompletionMessageParam {
   name?: string;
 }
 
-
-export type WrangleModel = 
-  | 'auto' 
-  | 'gpt-4o' 
-  | 'gpt-5-mini' 
-  | 'gemini-2.5-pro'
-  | (string & {});
+export type WrangleModel = 'auto' | 'gpt-4o' | 'gpt-5-mini' | 'gemini-2.5-pro' | (string & {});
 
 export interface ChatCompletionMessageToolCall {
   id: string;
   type: 'function';
   function: {
     name: string;
-    arguments: string; 
+    arguments: string;
   };
 }
 
@@ -137,7 +131,7 @@ export interface ChatCompletionFunctionTool {
   function: {
     name: string;
     description?: string;
-    parameters?: Record<string, unknown>; 
+    parameters?: Record<string, unknown>;
   };
 }
 
@@ -149,9 +143,7 @@ export interface ChatCompletionWebSearchTool {
 }
 
 // The Union type allows either a standard function OR the web_search tool
-export type ChatCompletionTool = 
-  | ChatCompletionFunctionTool 
-  | ChatCompletionWebSearchTool;
+export type ChatCompletionTool = ChatCompletionFunctionTool | ChatCompletionWebSearchTool;
 
 export interface SLMConfig {
   /**
@@ -161,7 +153,19 @@ export interface SLMConfig {
   /**
    * Optional category to guide the router (e.g., 'coding', 'chat', 'summarization').
    */
-  useCase?: 'coding' | 'tool_use' | 'reasoning' | 'chat' | 'summarization' | 'classification' | 'creative_writing' | 'grammar_correction' | 'short_copywriting' | 'autoformatting' | 'other' | (string & {});
+  useCase?:
+    | 'coding'
+    | 'tool_use'
+    | 'reasoning'
+    | 'chat'
+    | 'summarization'
+    | 'classification'
+    | 'creative_writing'
+    | 'grammar_correction'
+    | 'short_copywriting'
+    | 'autoformatting'
+    | 'other'
+    | (string & {});
 }
 
 export interface ChatCompletionCreateParams {

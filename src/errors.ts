@@ -131,7 +131,7 @@ Status Code	    Error Type
     N/A	        APIConnectionError
 
 */
-  const request_id = headers?.["x-request-id"];
+  const request_id = headers?.['x-request-id'];
 
   if (status === 400) {
     return new BadRequestError(message, { status, error, headers, request_id });

@@ -21,19 +21,10 @@ import {
   SustainabilityReport,
   RequestOptions,
   Logger,
-  LogLevel
+  LogLevel,
 } from './types';
 import { StreamChatCompletion } from './streaming';
-import {
-  WrangleError,
-  AuthenticationError,
-  RateLimitError,
-  BadRequestError,
-  NotFoundError,
-  APIError,
-  APIConnectionError,
-  makeStatusError
-} from './errors';
+import { WrangleError, APIConnectionError, makeStatusError } from './errors';
 
 // Re-export types and errors so users can access them easily
 export * from './types';
@@ -43,7 +34,7 @@ export * from './errors';
  * Simple console-based logger
  */
 class ConsoleLogger implements Logger {
-  constructor(private level: LogLevel) { }
+  constructor(private level: LogLevel) {}
 
   private shouldLog(level: LogLevel): boolean {
     const levels: LogLevel[] = ['debug', 'info', 'warn', 'error', 'silent'];
@@ -96,23 +87,23 @@ export class WrangleAI {
 
     if (!apiKey) {
       throw new Error(
-        "The WrangleAI client requires an apiKey. " +
-        "Pass it as an argument or set WRANGLEAI_API_KEY environment variable."
+        'The WrangleAI client requires an apiKey. ' +
+          'Pass it as an argument or set WRANGLEAI_API_KEY environment variable.',
       );
     }
 
     // Browser safety check
     if (typeof window !== 'undefined' && !options.dangerouslyAllowBrowser) {
       throw new Error(
-        "WrangleAI client detected browser environment. " +
-        "To use in browser (not recommended for production), " +
-        "pass dangerouslyAllowBrowser: true in options."
+        'WrangleAI client detected browser environment. ' +
+          'To use in browser (not recommended for production), ' +
+          'pass dangerouslyAllowBrowser: true in options.',
       );
     }
 
     this.apiKey = apiKey;
     // Keep hardcoded staging URL as per user request
-    this.baseURL = "https://staging-gateway.wrangleai.com/v1";
+    this.baseURL = 'https://staging-gateway.wrangleai.com/v1';
     this.timeout = options.timeout || 60000;
     this.maxRetries = options.maxRetries ?? 2;
 
@@ -123,7 +114,10 @@ export class WrangleAI {
     // Auto-detect RAG base URL (port 8085) if not provided
     this.ragBaseURL = options.ragBaseURL || this.baseURL.replace(':8080', ':8085');
 
-    this.logger.debug('Initializing WrangleAI client', { baseURL: this.baseURL, ragBaseURL: this.ragBaseURL });
+    this.logger.debug('Initializing WrangleAI client', {
+      baseURL: this.baseURL,
+      ragBaseURL: this.ragBaseURL,
+    });
   }
 
   /**
@@ -181,7 +175,11 @@ export class WrangleAI {
    * Uses string concatenation instead of new URL(path, base) because
    * paths starting with '/' are absolute from the origin in URL constructor.
    */
-  private buildURL(baseURL: string, path: string, query?: Record<string, string | number | boolean | undefined>): string {
+  private buildURL(
+    baseURL: string,
+    path: string,
+    query?: Record<string, string | number | boolean | undefined>,
+  ): string {
     const base = baseURL.endsWith('/') ? baseURL.slice(0, -1) : baseURL;
     const cleanPath = path.startsWith('/') ? path : '/' + path;
     const fullURL = base + cleanPath;
@@ -204,14 +202,11 @@ export class WrangleAI {
    * Core fetch method — replaces axios instances.
    * Handles headers, timeout, and abort signal.
    */
-  private async _fetch(
-    baseURL: string,
-    config: FetchRequestConfig
-  ): Promise<Response> {
+  private async _fetch(baseURL: string, config: FetchRequestConfig): Promise<Response> {
     const url = this.buildURL(baseURL, config.path, config.query);
 
     const headers: Record<string, string> = {
-      'Authorization': `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${this.apiKey}`,
       ...config.headers,
     };
 
@@ -248,9 +243,11 @@ export class WrangleAI {
       method: config.method.toUpperCase(),
       headers,
       signal: config.signal || timeoutController.signal,
-      ...(config.body ? {
-        body: config.body instanceof FormData ? config.body : JSON.stringify(config.body)
-      } : {}),
+      ...(config.body
+        ? {
+            body: config.body instanceof FormData ? config.body : JSON.stringify(config.body),
+          }
+        : {}),
     };
 
     try {
@@ -318,7 +315,9 @@ export class WrangleAI {
   /**
    * Parse error response body from a failed fetch Response.
    */
-  private async parseErrorResponse(response: Response): Promise<{ message: string; errorData: any }> {
+  private async parseErrorResponse(
+    response: Response,
+  ): Promise<{ message: string; errorData: any }> {
     let errorData: any = null;
     let message = `Request failed with status ${response.status}`;
 
@@ -346,7 +345,7 @@ export class WrangleAI {
     baseURL: string,
     config: FetchRequestConfig,
     options?: RequestOptions,
-    requestName?: string
+    requestName?: string,
   ): Promise<T> {
     const effectiveMaxRetries = options?.maxRetries ?? this.maxRetries;
     const effectiveTimeout = options?.timeout || this.timeout;
@@ -361,8 +360,12 @@ export class WrangleAI {
           const jitter = Math.random() * 100;
           const delay = baseDelay + jitter;
 
-          this.logger.info(`Retrying ${requestName || config.path} (attempt ${attempt + 1}/${effectiveMaxRetries + 1}) after ${delay.toFixed(0)}ms`);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          this.logger.info(
+            `Retrying ${requestName || config.path} (attempt ${attempt + 1}/${
+              effectiveMaxRetries + 1
+            }) after ${delay.toFixed(0)}ms`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
 
         this.logger.debug(`Making request: ${config.method.toUpperCase()} ${config.path}`);
@@ -382,16 +385,23 @@ export class WrangleAI {
           const canRetry = this.shouldRetry(status);
 
           if (canRetry && attempt < effectiveMaxRetries) {
-            this.logger.warn(`Request ${requestName || config.path} failed with status ${status} (attempt ${attempt + 1}/${effectiveMaxRetries + 1}), will retry`, {
-              error: message,
-              status: status
-            });
+            this.logger.warn(
+              `Request ${requestName || config.path} failed with status ${status} (attempt ${
+                attempt + 1
+              }/${effectiveMaxRetries + 1}), will retry`,
+              {
+                error: message,
+                status: status,
+              },
+            );
             lastError = makeStatusError(status, errorData, message, headers);
             continue;
           }
 
           // No more retries or not retryable
-          this.logger.error(`Request ${requestName || config.path} failed after ${attempt + 1} attempts`);
+          this.logger.error(
+            `Request ${requestName || config.path} failed after ${attempt + 1} attempts`,
+          );
           throw makeStatusError(status, errorData, message, headers);
         }
 
@@ -419,7 +429,11 @@ export class WrangleAI {
 
         // Network/connection errors — retry if attempts remain
         if (error instanceof APIConnectionError && attempt < effectiveMaxRetries) {
-          this.logger.warn(`Request ${requestName || config.path} failed with connection error (attempt ${attempt + 1}/${effectiveMaxRetries + 1}), will retry`);
+          this.logger.warn(
+            `Request ${requestName || config.path} failed with connection error (attempt ${
+              attempt + 1
+            }/${effectiveMaxRetries + 1}), will retry`,
+          );
           continue;
         }
 
@@ -437,7 +451,7 @@ export class WrangleAI {
   private async makeStreamRequest(
     baseURL: string,
     config: FetchRequestConfig,
-    options?: RequestOptions
+    options?: RequestOptions,
   ): Promise<Response> {
     const effectiveTimeout = options?.timeout || this.timeout;
 
@@ -468,9 +482,16 @@ export class WrangleAI {
       create: ((params: ChatCompletionCreateParams, options?: RequestOptions) => {
         return this.createChatRequest(params, options);
       }) as {
-        (params: ChatCompletionCreateParams & { stream: true }, options?: RequestOptions): Promise<Stream<ChatCompletionChunk>>;
-        (params: ChatCompletionCreateParams & { stream?: false }, options?: RequestOptions): Promise<ChatCompletion>;
-        (params: ChatCompletionCreateParams, options?: RequestOptions): Promise<ChatCompletion | Stream<ChatCompletionChunk>>;
+        (params: ChatCompletionCreateParams & { stream: true }, options?: RequestOptions): Promise<
+          Stream<ChatCompletionChunk>
+        >;
+        (
+          params: ChatCompletionCreateParams & { stream?: false },
+          options?: RequestOptions,
+        ): Promise<ChatCompletion>;
+        (params: ChatCompletionCreateParams, options?: RequestOptions): Promise<
+          ChatCompletion | Stream<ChatCompletionChunk>
+        >;
       },
     },
   };
@@ -480,15 +501,16 @@ export class WrangleAI {
    */
   private async createChatRequest(
     params: ChatCompletionCreateParams,
-    options?: RequestOptions
+    options?: RequestOptions,
   ): Promise<ChatCompletion | Stream<ChatCompletionChunk>> {
     try {
       if (params.stream) {
         // Streaming Request — get raw Response
-        const response = await this.makeStreamRequest(
-          this.baseURL,
-          { method: 'POST', path: '/chat/completions', body: params }
-        );
+        const response = await this.makeStreamRequest(this.baseURL, {
+          method: 'POST',
+          path: '/chat/completions',
+          body: params,
+        });
 
         // Extract request ID from headers
         const requestId = response.headers.get('x-request-id') || undefined;
@@ -499,7 +521,6 @@ export class WrangleAI {
 
         // Pass the ReadableStream to our generator with request ID
         return StreamChatCompletion(response.body, requestId);
-
       } else {
         // Standard Request
         const response = await this._fetch(this.baseURL, {
@@ -517,7 +538,7 @@ export class WrangleAI {
           throw makeStatusError(status, errorData, message, headers);
         }
 
-        const data = await response.json() as ChatCompletion;
+        const data = (await response.json()) as ChatCompletion;
 
         // Extract and attach request ID
         const requestId = response.headers.get('x-request-id');
@@ -545,7 +566,7 @@ export class WrangleAI {
           this.baseURL,
           { method: 'GET', path: '/models' },
           options,
-          'models.list'
+          'models.list',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -556,14 +577,14 @@ export class WrangleAI {
   public usage = {
     retrieve: async (
       params?: { startDate?: string; endDate?: string },
-      options?: RequestOptions
+      options?: RequestOptions,
     ) => {
       try {
         return await this.makeRequest<UsageResponse>(
           this.baseURL,
           { method: 'GET', path: '/usage', query: params as any },
           options,
-          'usage.retrieve'
+          'usage.retrieve',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -573,14 +594,14 @@ export class WrangleAI {
     retrieveByModel: async (
       model: string,
       params?: { startDate?: string; endDate?: string },
-      options?: RequestOptions
+      options?: RequestOptions,
     ) => {
       try {
         return await this.makeRequest<UsageResponse>(
           this.baseURL,
           { method: 'GET', path: '/usage/model', query: { ...params, model } as any },
           options,
-          'usage.retrieveByModel'
+          'usage.retrieveByModel',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -591,14 +612,14 @@ export class WrangleAI {
   public cost = {
     retrieve: async (
       params?: { startDate?: string; endDate?: string },
-      options?: RequestOptions
+      options?: RequestOptions,
     ) => {
       try {
         return await this.makeRequest<CostResponse>(
           this.baseURL,
           { method: 'GET', path: '/cost', query: params as any },
           options,
-          'cost.retrieve'
+          'cost.retrieve',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -617,14 +638,14 @@ export class WrangleAI {
      */
     retrieve: async (
       params?: { startDate?: string; endDate?: string },
-      options?: RequestOptions
+      options?: RequestOptions,
     ): Promise<SustainabilityReport> => {
       try {
         return await this.makeRequest<SustainabilityReport>(
           this.baseURL,
           { method: 'GET', path: '/sustainability', query: params as any },
           options,
-          'sustainability.retrieve'
+          'sustainability.retrieve',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -641,11 +662,11 @@ export class WrangleAI {
             method: 'GET',
             path: '/keys/verify',
             headers: {
-              'X-API-Key': this.apiKey
-            }
+              'X-API-Key': this.apiKey,
+            },
           },
           options,
-          'keys.verify'
+          'keys.verify',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -660,7 +681,11 @@ export class WrangleAI {
     /**
      * Upload a file.
      */
-    create: async (file: Buffer | Uint8Array | Blob, purpose: string = 'assistants', filename?: string): Promise<FileObject> => {
+    create: async (
+      file: Buffer | Uint8Array | Blob,
+      purpose: string = 'assistants',
+      filename?: string,
+    ): Promise<FileObject> => {
       try {
         const formData = new FormData();
         const fname = filename || 'upload';
@@ -686,7 +711,7 @@ export class WrangleAI {
           throw makeStatusError(status, errorData, message, headers);
         }
 
-        return await response.json() as FileObject;
+        return (await response.json()) as FileObject;
       } catch (error) {
         throw this.handleError(error);
       }
@@ -706,7 +731,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'GET', path: '/files', query: params as any },
           undefined,
-          'files.list'
+          'files.list',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -722,7 +747,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'GET', path: `/files/${fileId}` },
           undefined,
-          'files.retrieve'
+          'files.retrieve',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -738,7 +763,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'DELETE', path: `/files/${fileId}` },
           undefined,
-          'files.delete'
+          'files.delete',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -765,7 +790,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'POST', path: '/vector_stores', body: params || {} },
           undefined,
-          'vector_stores.create'
+          'vector_stores.create',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -786,7 +811,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'GET', path: '/vector_stores', query: params as any },
           undefined,
-          'vector_stores.list'
+          'vector_stores.list',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -802,7 +827,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'GET', path: `/vector_stores/${vectorStoreId}` },
           undefined,
-          'vector_stores.retrieve'
+          'vector_stores.retrieve',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -818,14 +843,14 @@ export class WrangleAI {
         name?: string;
         metadata?: Record<string, string>;
         expires_after?: { anchor: string; days: number };
-      }
+      },
     ): Promise<VectorStore> => {
       try {
         return await this.makeRequest<VectorStore>(
           this.ragBaseURL,
           { method: 'POST', path: `/vector_stores/${vectorStoreId}`, body: params || {} },
           undefined,
-          'vector_stores.update'
+          'vector_stores.update',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -841,7 +866,7 @@ export class WrangleAI {
           this.ragBaseURL,
           { method: 'DELETE', path: `/vector_stores/${vectorStoreId}` },
           undefined,
-          'vector_stores.delete'
+          'vector_stores.delete',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -859,14 +884,14 @@ export class WrangleAI {
         max_num_results?: number;
         ranking_options?: Record<string, unknown>;
         rewrite_query?: boolean;
-      }
+      },
     ): Promise<VectorStoreSearchResponse> => {
       try {
         return await this.makeRequest<VectorStoreSearchResponse>(
           this.ragBaseURL,
           { method: 'POST', path: `/vector_stores/${vectorStoreId}/search`, body: params },
           undefined,
-          'vector_stores.search'
+          'vector_stores.search',
         );
       } catch (error) {
         throw this.handleError(error);
@@ -886,14 +911,14 @@ export class WrangleAI {
           file_id: string;
           attributes?: Record<string, string | number | boolean>;
           chunking_strategy?: Record<string, unknown>;
-        }
+        },
       ): Promise<VectorStoreFile> => {
         try {
           return await this.makeRequest<VectorStoreFile>(
             this.ragBaseURL,
             { method: 'POST', path: `/vector_stores/${vectorStoreId}/files`, body: params },
             undefined,
-            'vector_stores.files.create'
+            'vector_stores.files.create',
           );
         } catch (error) {
           throw this.handleError(error);
@@ -911,14 +936,14 @@ export class WrangleAI {
           after?: string;
           before?: string;
           filter?: 'in_progress' | 'completed' | 'failed' | 'cancelled';
-        }
+        },
       ): Promise<VectorStoreFileListResponse> => {
         try {
           return await this.makeRequest<VectorStoreFileListResponse>(
             this.ragBaseURL,
             { method: 'GET', path: `/vector_stores/${vectorStoreId}/files`, query: params as any },
             undefined,
-            'vector_stores.files.list'
+            'vector_stores.files.list',
           );
         } catch (error) {
           throw this.handleError(error);
@@ -934,7 +959,7 @@ export class WrangleAI {
             this.ragBaseURL,
             { method: 'GET', path: `/vector_stores/${vectorStoreId}/files/${fileId}` },
             undefined,
-            'vector_stores.files.retrieve'
+            'vector_stores.files.retrieve',
           );
         } catch (error) {
           throw this.handleError(error);
@@ -949,14 +974,18 @@ export class WrangleAI {
         fileId: string,
         params: {
           attributes: Record<string, string | number | boolean>;
-        }
+        },
       ): Promise<VectorStoreFile> => {
         try {
           return await this.makeRequest<VectorStoreFile>(
             this.ragBaseURL,
-            { method: 'POST', path: `/vector_stores/${vectorStoreId}/files/${fileId}`, body: params },
+            {
+              method: 'POST',
+              path: `/vector_stores/${vectorStoreId}/files/${fileId}`,
+              body: params,
+            },
             undefined,
-            'vector_stores.files.update'
+            'vector_stores.files.update',
           );
         } catch (error) {
           throw this.handleError(error);
@@ -972,7 +1001,7 @@ export class WrangleAI {
             this.ragBaseURL,
             { method: 'DELETE', path: `/vector_stores/${vectorStoreId}/files/${fileId}` },
             undefined,
-            'vector_stores.files.delete'
+            'vector_stores.files.delete',
           );
         } catch (error) {
           throw this.handleError(error);
