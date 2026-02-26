@@ -8,11 +8,13 @@ export interface ClientOptions {
   apiKey?: string;
   /**
    * Base URL for the API.
-   * Defaults to https://staging-gateway.wrangleai.com/v1
+   * Can also be set via WRANGLEAI_BASE_URL environment variable.
+   * Defaults to https://gateway.wrangleai.com/v1
    */
   baseURL?: string;
   /**
    * RAG API Base URL for files and vector stores.
+   * Can also be set via WRANGLEAI_RAG_BASE_URL environment variable.
    * Auto-detected (port 8085) if not provided.
    */
   ragBaseURL?: string;

@@ -102,8 +102,14 @@ export class WrangleAI {
     }
 
     this.apiKey = apiKey;
-    // Keep hardcoded staging URL as per user request
-    this.baseURL = 'https://staging-gateway.wrangleai.com/v1';
+
+    // Base URL: priority order - options.baseURL > env var > default
+    const baseURL =
+      options.baseURL ||
+      process.env.WRANGLEAI_BASE_URL ||
+      'https://gateway.wrangleai.com/v1';
+    this.baseURL = baseURL;
+
     this.timeout = options.timeout || 60000;
     this.maxRetries = options.maxRetries ?? 2;
 
@@ -112,7 +118,10 @@ export class WrangleAI {
     this.logger = options.logger || new ConsoleLogger(logLevel);
 
     // Auto-detect RAG base URL (port 8085) if not provided
-    this.ragBaseURL = options.ragBaseURL || this.baseURL.replace(':8080', ':8085');
+    this.ragBaseURL =
+      options.ragBaseURL ||
+      process.env.WRANGLEAI_RAG_BASE_URL ||
+      this.baseURL.replace(':8080', ':8085');
 
     this.logger.debug('Initializing WrangleAI client', {
       baseURL: this.baseURL,
